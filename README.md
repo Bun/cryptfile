@@ -1,6 +1,6 @@
 # cryptfile
 
-A set of tools to make managing encrypted filesystem-in-a-files easier.
+A tool to make managing encrypted filesystem-in-a-file easier.
 
 Usage:
 
