@@ -231,8 +231,6 @@ if __name__ == '__main__':
     from sys import argv
     from os import geteuid
 
-    if geteuid() != 0:
-        COMMAND_PREPEND = ['sudo']
 
     commands = {
         'mount': cryptfile_mount,
@@ -240,5 +238,15 @@ if __name__ == '__main__':
         'format': cryptfile_format,
         'resize': cryptfile_resize,
     }
+
+    if not argv[1:] or argv[1] not in commands:
+        print('Available commands:', sorted(commands.keys()))
+        exit(1)
+
+    if geteuid() != 0:
+        # TODO: this doesn't work if losetup is in /usr/sbin and that is not
+        # in your $PATH, unless sudo adds this path.
+        COMMAND_PREPEND = ['sudo']
+        print('Hint: you probably want to use sudo. Trying it...')
 
     commands[argv[1]](*argv[2:])
