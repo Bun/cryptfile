@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""
+cryptfile
+=========
+
+Do things with LUKS and files.
+"""
+
+from __future__ import print_function
+from sys import stderr
+
+from subprocess import call, check_call, check_output
+from os.path import exists, abspath
+from os import stat
+
+
+FS = 'ext2'
+MAKEFS = 'mkfs.' + FS
+FSCK = 'fsck.' + FS
+RESIZEFS = 'resize2fs'
+
+COMMAND_PREPEND = []
+
+
+def _check_call(args):
+    cmd = COMMAND_PREPEND + args
+    print('>', cmd)
+    return check_call(cmd)
+
+
+def _check_output(args):
+    cmd = COMMAND_PREPEND + args
+    return check_output(cmd)
+
+
+def _call(args):
+    cmd = COMMAND_PREPEND + args
+    print('>', cmd)
+    return call(cmd)
+
+
+def lo2cs(loop):
+    return loop.rsplit('/', 1)[-1]
+
+
+def lo_mount(image):
+    loop = check_output(['losetup', '-f']).decode().rstrip()
+    check_call(['losetup', loop, image])
+    return loop
+
+
+lo_umount = lambda loop: _check_call(['losetup', '-d', loop])
+fs_umount = lambda path: _check_call(['umount', path])
+
+
+def cs_umount(loop):
+    r = _call(['cryptsetup', 'luksClose', lo2cs(loop)])
+    if r == 4:
+        print('Non-fatal error: luksClose exit code', r, file=stderr)
+    elif r != 0:
+        raise ValueError('luksClose exit code %r' % (r,))
+    return r
+
+
+def lo_find(image):
+    match = ' (' + abspath(image) + ')'  # Probably not always OK..
+    lo_mounts = _check_output(['losetup', '--all']).decode().split('\n')
+    for m in lo_mounts:
+        if m.endswith(match):
+            mount = m.split(':', 1)[0]
+            break
+    else:
+        print('Not mounted:', image)
+        return
+
+    print('File', image, 'mounted:', mount)
+    return mount
+
+
+
+unit_multiply = {
+    'K': 1024,
+    'M': 1024**2,
+    'G': 1024**3,
+    'T': 1024**4,
+    'KB': 1000,
+    'MB': 1000**2,
+    'GB': 1000**3,
+    'TB': 1000**4,
+}
+
+
+def size_as_bytes(sz):
+    for i, c in enumerate(sz):
+        if not c.isdigit():
+            unit = sz[i:].upper()
+            return int(sz[:i]) * unit_multiply[unit]
+    return int(sz)
+
+
+def fs_find(path):
+    for line in open('/proc/mounts'):
+        parts = line.split(' ', 2)
+        if parts[0] == path or parts[1] == path:
+            return parts[0]
+
+
+
+def umount(path=None, loop=None):
+    if not loop:
+        loop = lo_find(path)
+
+    assert loop
+    lo_fs_umount(loop)
+    cs_umount(loop)
+    lo_umount(loop)
+
+
+def lo_fs_umount(loop):
+    path = '/dev/mapper/' + lo2cs(loop)
+    mount = fs_find(path)
+    if mount:
+        fs_umount(mount)
+
+
+def cs_open(loop):
+    cs = lo2cs(loop)
+    mapper = '/dev/mapper/' + cs
+
+    if not exists(mapper):
+        _check_call(['cryptsetup', 'luksOpen', loop, cs])
+
+    return mapper
+
+
+#
+# Commands
+#
+
+def cryptfile_mount(image_path, mount_point):
+    """
+    cryptfile mount example.img mnt
+    """
+    loop = lo_find(image_path)
+    if not loop:
+        loop = lo_mount(image_path)
+
+    mount = fs_find(loop)
+    if mount:
+        print(mount, '# Already mounted')
+        return
+
+    mapper = cs_open(loop)
+    _check_call(['mount', mapper, mount_point])
+    print(mount_point)
+
+
+def cryptfile_format(image_path, fs_size, force='no'):
+    """
+    cryptfile format example.img 32M
+    """
+    if exists(image_path) and force != 'yes':
+        raise ValueError('Not formatting existing file %r' % (image_path,))
+
+    size_as_bytes(fs_size)
+    umount(image_path)
+    _check_call(['truncate', '-s', fs_size, '--', image_path])
+    loop = lo_mount(image_path)
+    cs = lo2cs(loop)
+    mapper = '/dev/mapper/' + cs
+    _check_call(['cryptsetup', 'luksFormat', loop])
+    _check_call(['cryptsetup', 'luksOpen', loop, cs])
+    _check_call([MAKEFS, mapper])
+
+
+def cryptfile_umount(image_path):
+    """
+    cryptfile umount example.img
+    """
+    umount(image_path)
+
+
+def cryptfile_resize(image_path, new_size):
+    """
+    cryptfile resize example.img 64M
+
+    * When shrinking, size should be either K, M, or G
+    * Will potentially eat your filesystem
+    """
+
+    raise NotImplementedError('This code does not work yet.')
+
+    old_bytes = stat(image_path).st_size
+    new_bytes = size_as_bytes(new_size)
+
+    loop = lo_find(image_path)
+
+    if old_bytes == new_bytes:
+        print('Already correct size')
+        return
+
+    elif old_bytes < new_bytes:
+        print('Increasing file size')
+
+        umount(loop=loop)
+        _check_call(['truncate', '-s', new_size, '--', image_path])
+        loop = lo_mount(image_path)
+        mapper = cs_open(loop)
+        _check_call([FSCK, '-f', mapper])
+        _check_call([RESIZEFS, mapper])
+        umount(loop=loop)
+    else:
+        print('Reducing file size')
+
+        if loop:
+            lo_fs_umount(loop)
+        else:
+            loop = lo_mount(image_path)
+
+        mapper = cs_open(loop)
+        _check_call([FSCK, '-f', mapper])
+        _check_call([RESIZEFS, mapper, new_size])
+        umount(loop=loop)
+
+        _check_call(['truncate', '-s', new_size, '--', image_path])
+
+
+if __name__ == '__main__':
+    from sys import argv
+    from os import geteuid
+
+    if geteuid() != 0:
+        COMMAND_PREPEND = ['sudo']
+
+    commands = {
+        'mount': cryptfile_mount,
+        'umount': cryptfile_umount,
+        'format': cryptfile_format,
+        'resize': cryptfile_resize,
+    }
+
+    commands[argv[1]](*argv[2:])
