@@ -110,7 +110,9 @@ def umount(path=None, loop=None):
     if not loop:
         loop = lo_find(path)
 
-    assert loop
+    if not loop:
+        return
+
     lo_fs_umount(loop)
     cs_umount(loop)
     lo_umount(loop)
