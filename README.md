@@ -27,5 +27,5 @@ Usage:
 ## Dependencies
 
 * Python 3
-* Start mount tools: `mount`, `umount`, `losetup`
-* Cryptsetup (`cryptsetup-bin`, `sys-fs/cryptsetup`)
+* Standard mount tools: `mount`, `umount`, `losetup`
+* Cryptsetup (Debian: `cryptsetup-bin`, Gentoo: `sys-fs/cryptsetup`)

@@ -4,6 +4,10 @@ cryptfile
 =========
 
 Do things with LUKS and files.
+
+When mounting a loop device with crypsetup, the same name as the loop device
+itself will be chosen. This means /dev/loopN (encrypted) will be made available
+as /dev/mapper/loopN (plaintext).
 """
 
 from __future__ import print_function
@@ -19,12 +23,16 @@ MAKEFS = 'mkfs.' + FS
 FSCK = 'fsck.' + FS
 RESIZEFS = 'resize2fs'
 
-COMMAND_PREPEND = []
 
+#
+# Utilities
+#
+
+COMMAND_PREPEND = []
 
 def _check_call(args):
     cmd = COMMAND_PREPEND + args
-    print('>', cmd)
+    print('\033[37m>', *cmd, end='\033[0m\n')
     return check_call(cmd)
 
 
@@ -35,47 +43,14 @@ def _check_output(args):
 
 def _call(args):
     cmd = COMMAND_PREPEND + args
-    print('>', cmd)
+    print('\033[37m>', *cmd, end='\033[0m\n')
     return call(cmd)
 
 
 def lo2cs(loop):
-    return loop.rsplit('/', 1)[-1]
-
-
-def lo_mount(image):
-    loop = check_output(['losetup', '-f']).decode().rstrip()
-    check_call(['losetup', loop, image])
-    return loop
-
-
-lo_umount = lambda loop: _check_call(['losetup', '-d', loop])
-fs_umount = lambda path: _check_call(['umount', path])
-
-
-def cs_umount(loop):
-    r = _call(['cryptsetup', 'luksClose', lo2cs(loop)])
-    if r == 4:
-        print('Non-fatal error: luksClose exit code', r, file=stderr)
-    elif r != 0:
-        raise ValueError('luksClose exit code %r' % (r,))
-    return r
-
-
-def lo_find(image):
-    match = ' (' + abspath(image) + ')'  # Probably not always OK..
-    lo_mounts = _check_output(['losetup', '--all']).decode().split('\n')
-    for m in lo_mounts:
-        if m.endswith(match):
-            mount = m.split(':', 1)[0]
-            break
-    else:
-        print('Not mounted:', image)
-        return
-
-    print('File', image, 'mounted:', mount)
-    return mount
-
+    """Extract the loop device name for use with cryptsetup."""
+    name = loop.rsplit('/', 1)[-1]
+    return '/dev/mapper/' + name
 
 
 unit_multiply = {
@@ -91,6 +66,7 @@ unit_multiply = {
 
 
 def size_as_bytes(sz):
+    """Convert human readable units to bytes"""
     for i, c in enumerate(sz):
         if not c.isdigit():
             unit = sz[i:].upper()
@@ -98,15 +74,50 @@ def size_as_bytes(sz):
     return int(sz)
 
 
-def fs_find(path):
-    for line in open('/proc/mounts'):
-        parts = line.split(' ', 2)
-        if parts[0] == path or parts[1] == path:
-            return parts[0]
 
+#
+# Filesystem tools
+#
+
+
+def lo_mount(image):
+    """Mount the given file on a loop device."""
+    loop = check_output(['losetup', '-f']).decode().rstrip()
+    _check_call(['losetup', loop, image])
+    return loop
+
+
+def lo_umount(loop):
+    """Unmount the given loop device."""
+    _check_call(['losetup', '-d', loop])
+
+
+def fs_umount(path):
+    """Unmount the given path."""
+    _check_call(['umount', path])
+
+
+def cs_umount(loop):
+    """Close the given crypt device."""
+    r = _call(['cryptsetup', 'luksClose', lo2cs(loop)])
+    if r == 4:
+        # Device wasn't open
+        print('Non-fatal error: luksClose exit code', r, file=stderr)
+    elif r != 0:
+        raise ValueError('luksClose exit code %r' % (r,))
+    return r
+
+
+def lo_fs_umount(loop):
+    """Unmount the plaintext device associated with the given loop device."""
+    path = lo2cs(loop)
+    mount = fs_find(path)
+    if mount:
+        fs_umount(mount)
 
 
 def umount(path=None, loop=None):
+    """Unmount everything."""
     if not loop:
         loop = lo_find(path)
 
@@ -118,21 +129,38 @@ def umount(path=None, loop=None):
     lo_umount(loop)
 
 
-def lo_fs_umount(loop):
-    path = '/dev/mapper/' + lo2cs(loop)
-    mount = fs_find(path)
-    if mount:
-        fs_umount(mount)
+
+def lo_find(image):
+    """Find the loop device associated with the given file."""
+    match = ' (' + abspath(image) + ')'  # Probably not always OK..
+    lo_mounts = _check_output(['losetup', '--all']).decode().split('\n')
+    for m in lo_mounts:
+        if m.endswith(match):
+            # Loop device path
+            return m.split(':', 1)[0]
+
+    # Not mounted
+
+
+def fs_find(dev):
+    """Find the filesystem path associated with the given device and return
+    the mount point."""
+    for line in open('/proc/mounts'):
+        parts = line.split(' ', 2)
+        if parts[0] == dev:
+            return parts[1]
+
 
 
 def cs_open(loop):
+    """Open a crypt device for the given loop device."""
     cs = lo2cs(loop)
-    mapper = '/dev/mapper/' + cs
 
-    if not exists(mapper):
-        _check_call(['cryptsetup', 'luksOpen', loop, cs])
+    if not exists(cs):
+        name = cs.rsplit('/', 1)[-1]
+        _check_call(['cryptsetup', 'luksOpen', loop, name])
 
-    return mapper
+    return cs
 
 
 #
@@ -147,13 +175,14 @@ def cryptfile_mount(image_path, mount_point):
     if not loop:
         loop = lo_mount(image_path)
 
-    mount = fs_find(loop)
+    mount = fs_find(lo2cs(loop))
     if mount:
-        print(mount, '# Already mounted')
+        print('# Already mounted')
+        print(mount)
         return
 
-    mapper = cs_open(loop)
-    _check_call(['mount', mapper, mount_point])
+    cs = cs_open(loop)
+    _check_call(['mount', cs, mount_point])
     print(mount_point)
 
 
@@ -169,10 +198,10 @@ def cryptfile_format(image_path, fs_size, force='no'):
     _check_call(['truncate', '-s', fs_size, '--', image_path])
     loop = lo_mount(image_path)
     cs = lo2cs(loop)
-    mapper = '/dev/mapper/' + cs
     _check_call(['cryptsetup', 'luksFormat', loop])
-    _check_call(['cryptsetup', 'luksOpen', loop, cs])
-    _check_call([MAKEFS, mapper])
+    name = cs.rsplit('/', 1)[-1]
+    _check_call(['cryptsetup', 'luksOpen', loop, name])
+    _check_call([MAKEFS, cs])
 
 
 def cryptfile_umount(image_path):
@@ -207,9 +236,9 @@ def cryptfile_resize(image_path, new_size):
         umount(loop=loop)
         _check_call(['truncate', '-s', new_size, '--', image_path])
         loop = lo_mount(image_path)
-        mapper = cs_open(loop)
-        _check_call([FSCK, '-f', mapper])
-        _check_call([RESIZEFS, mapper])
+        cs = cs_open(loop)
+        _check_call([FSCK, '-f', cs])
+        _check_call([RESIZEFS, cs])
         umount(loop=loop)
     else:
         print('Reducing file size')
@@ -219,9 +248,9 @@ def cryptfile_resize(image_path, new_size):
         else:
             loop = lo_mount(image_path)
 
-        mapper = cs_open(loop)
-        _check_call([FSCK, '-f', mapper])
-        _check_call([RESIZEFS, mapper, new_size])
+        cs = cs_open(loop)
+        _check_call([FSCK, '-f', cs])
+        _check_call([RESIZEFS, cs, new_size])
         umount(loop=loop)
 
         _check_call(['truncate', '-s', new_size, '--', image_path])
