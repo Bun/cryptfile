@@ -5,17 +5,17 @@ A tool to make managing encrypted filesystem-in-a-file easier.
 Usage:
 
     # Create a new LUKS file
-    sudo cryptfile format example.img 32M
+    cryptfile format example.img 32M
 
     # Mount the LUKS file to `mnt`
-    sudo cryptfile mount example.img mnt
+    cryptfile mount example.img mnt
 
     # If you're mounting for the first time, you should also make the
     # filesystem accessible to you:
     sudo chown `id -u`:`id -g` mnt
 
     # Unmount
-    sudo cryptfile umount example.img
+    cryptfile umount example.img
 
 
 ## TODO
@@ -29,3 +29,4 @@ Usage:
 * Python 3
 * Standard mount tools: `mount`, `umount`, `losetup`
 * Cryptsetup (Debian: `cryptsetup-bin`, Gentoo: `sys-fs/cryptsetup`)
+* If you're not currently root, `sudo`

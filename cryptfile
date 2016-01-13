@@ -18,9 +18,10 @@ from os.path import exists, abspath
 from os import stat
 
 
+# ext2, no reserved blocks
 FS = 'ext2'
-MAKEFS = 'mkfs.' + FS
-FSCK = 'fsck.' + FS
+MAKEFS = ['mkfs.' + FS, '-m', '0']
+FSCK = ['fsck.' + FS, '-f']
 RESIZEFS = 'resize2fs'
 
 
@@ -194,14 +195,15 @@ def cryptfile_format(image_path, fs_size, force='no'):
         raise ValueError('Not formatting existing file %r' % (image_path,))
 
     size_as_bytes(fs_size)
+
     umount(image_path)
     _check_call(['truncate', '-s', fs_size, '--', image_path])
+
     loop = lo_mount(image_path)
-    cs = lo2cs(loop)
     _check_call(['cryptsetup', 'luksFormat', loop])
-    name = cs.rsplit('/', 1)[-1]
-    _check_call(['cryptsetup', 'luksOpen', loop, name])
-    _check_call([MAKEFS, cs])
+
+    cs = cs_open(loop)
+    _check_call(MAKEFS + [cs])
 
 
 def cryptfile_umount(image_path):
@@ -235,11 +237,13 @@ def cryptfile_resize(image_path, new_size):
 
         umount(loop=loop)
         _check_call(['truncate', '-s', new_size, '--', image_path])
+
         loop = lo_mount(image_path)
         cs = cs_open(loop)
-        _check_call([FSCK, '-f', cs])
+        _check_call(FSCK + [cs])
         _check_call([RESIZEFS, cs])
         umount(loop=loop)
+
     else:
         print('Reducing file size')
 
@@ -249,7 +253,7 @@ def cryptfile_resize(image_path, new_size):
             loop = lo_mount(image_path)
 
         cs = cs_open(loop)
-        _check_call([FSCK, '-f', cs])
+        _check_call(FSCK + [cs])
         _check_call([RESIZEFS, cs, new_size])
         umount(loop=loop)
 
@@ -273,9 +277,11 @@ if __name__ == '__main__':
         exit(1)
 
     if geteuid() != 0:
-        # TODO: this doesn't work if losetup is in /usr/sbin and that is not
-        # in your $PATH, unless sudo adds this path.
+        from os import environ
+
+        # losetup is in sbin and that is probably not in your $PATH
+        environ['PATH'] = environ['PATH'] + ':/usr/sbin:/sbin'
+
         COMMAND_PREPEND = ['sudo']
-        print('Hint: you probably want to use sudo. Trying it...')
 
     commands[argv[1]](*argv[2:])
