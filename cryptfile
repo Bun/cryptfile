@@ -14,8 +14,8 @@ from __future__ import print_function
 from sys import stderr
 
 from subprocess import call, check_call, check_output
-from os.path import exists, abspath
-from os import stat
+from os.path import exists, abspath, join
+from os import stat, listdir
 
 
 # ext2, no reserved blocks
@@ -39,6 +39,7 @@ def _check_call(args):
 
 def _check_output(args):
     cmd = COMMAND_PREPEND + args
+    print('\033[37m>', *cmd, end='\033[0m\n')
     return check_output(cmd)
 
 
@@ -83,7 +84,7 @@ def size_as_bytes(sz):
 
 def lo_mount(image):
     """Mount the given file on a loop device."""
-    loop = check_output(['losetup', '-f']).decode().rstrip()
+    loop = _check_output(['losetup', '-f']).decode().rstrip()
     _check_call(['losetup', loop, image])
     return loop
 
@@ -123,6 +124,7 @@ def umount(path=None, loop=None):
         loop = lo_find(path)
 
     if not loop:
+        print('Non-fatal error: could not find loop for', path, file=stderr)
         return
 
     lo_fs_umount(loop)
@@ -131,14 +133,18 @@ def umount(path=None, loop=None):
 
 
 
-def lo_find(image):
+def lo_find(image, search='/sys/devices/virtual/block'):
     """Find the loop device associated with the given file."""
-    match = ' (' + abspath(image) + ')'  # Probably not always OK..
-    lo_mounts = _check_output(['losetup', '--all']).decode().split('\n')
-    for m in lo_mounts:
-        if m.endswith(match):
-            # Loop device path
-            return m.split(':', 1)[0]
+    match = abspath(image)
+
+    for b in listdir(search):
+        bf = join(search, b, 'loop/backing_file')
+        if not exists(bf):
+            continue
+
+        path = open(bf).read().rstrip('\n')
+        if match == path:
+            return join('/dev', b)
 
     # Not mounted
 
@@ -206,11 +212,11 @@ def cryptfile_format(image_path, fs_size, force='no'):
     _check_call(MAKEFS + [cs])
 
 
-def cryptfile_umount(image_path):
+def cryptfile_umount(image_path, loop=None):
     """
     cryptfile umount example.img
     """
-    umount(image_path)
+    umount(image_path, loop)
 
 
 def cryptfile_resize(image_path, new_size):
