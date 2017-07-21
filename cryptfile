@@ -135,6 +135,10 @@ def umount(path=None, loop=None):
 
 def lo_find(image, search='/sys/devices/virtual/block'):
     """Find the loop device associated with the given file."""
+    if not exists(search):
+        # This can happen if e.g. the loop module has not been loaded yet
+        return
+
     match = abspath(image)
 
     for b in listdir(search):
