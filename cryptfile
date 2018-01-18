@@ -29,22 +29,17 @@ RESIZEFS = 'resize2fs'
 # Utilities
 #
 
-COMMAND_PREPEND = []
-
-def _check_call(args):
-    cmd = COMMAND_PREPEND + args
+def _check_call(cmd):
     print('\033[37m>', *cmd, end='\033[0m\n')
     return check_call(cmd)
 
 
-def _check_output(args):
-    cmd = COMMAND_PREPEND + args
+def _check_output(cmd):
     print('\033[37m>', *cmd, end='\033[0m\n')
     return check_output(cmd)
 
 
-def _call(args):
-    cmd = COMMAND_PREPEND + args
+def _call(cmd):
     print('\033[37m>', *cmd, end='\033[0m\n')
     return call(cmd)
 
@@ -287,11 +282,8 @@ if __name__ == '__main__':
         exit(1)
 
     if geteuid() != 0:
-        from os import environ
-
-        # losetup is in sbin and that is probably not in your $PATH
-        environ['PATH'] = environ['PATH'] + ':/usr/sbin:/sbin'
-
-        COMMAND_PREPEND = ['sudo']
+        print('Elevating privileges')
+        _check_call(['sudo'] + argv)
+        exit()
 
     commands[argv[1]](*argv[2:])
